@@ -5,9 +5,8 @@ public class QRcode
     public QRcode(string? text)
     {
         this.SourceText = text;
-        this.mode = EncodingMode.Numeric;
+        this.mode = EncodingMode.Binary;
         this.mask = Mask.M101;
-        this.mode = EncodingMode.Numeric;
         this.version = QR.V1;
         this.level = EccLevel.M;
     }
