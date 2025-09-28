@@ -11,8 +11,5 @@ while (true){
     Console.WriteLine("QR code text:");
     Console.WriteLine(qRcode);
 
-    qRcode.SourceText += "!";
-    Console.WriteLine(qRcode);
-
     Console.ReadKey();
 }

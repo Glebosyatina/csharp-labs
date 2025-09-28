@@ -52,7 +52,7 @@ public class QRcode
 
     public override string ToString()
     {
-        return this.SourceText;
+        return this.QrCode;
     }
 }
 
