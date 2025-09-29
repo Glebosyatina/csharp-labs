@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Drawing;
+using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics.X86;
 using System.Text;
 using static System.Runtime.InteropServices.JavaScript.JSType;
@@ -18,12 +19,39 @@ internal static class QrCodeBuilder
 
         // Этап 1. Полный блок с данными +  подходящий уровень коррекции ошибок + нужная версия QR-кода
         // Тут нужно вызвать 2 функции Magic
-        string dataEncode = defineTypeOfInformationAndEncodeIt(text, ref codeType); //определяем тип данных и формируем строку из 0 и 1, добавляем ее к полю о методе кодирования и колва данных
-        qrCode.AlgorithmOfCodingAndDataLength(codeType, qrCodeVersion, text);
-        qrCode.Append(dataEncode);
+
+        //определяем тип данных и формируем строку из 0 и 1, добавляем ее к полю о методе кодирования и колва данных
+        string dataEncode = defineTypeOfInformationAndEncodeIt(text, ref codeType); 
+ 
+        var QrCodeType = codeType.GetValueOrDefault(EncodingMode.Binary);//обойти Nullable
+
+        //получаем закодированные данные, уровень коррекции, версию кода
+        var (stage1, eccLevel, version) = QRcodeWithECClevelAndVersion(text, dataEncode, QrCodeType, qrCodeVersion, needCorrectionLevel);
 
         // Этап 2. Блоки с данными + байты коррекции
         // А тут целых 4 разных функций Magic
+
+        //максимальный размер данных
+        int maxDataLength = _maxData[(eccLevel, version)];
+        //дополняеем блок с данными чередующимися байтами и нулями для кртаности 8
+        var FullData = ComplementData(dataEncode, maxDataLength);
+
+        //получаем колво блоков коррекции
+        int cntBlocksCorrection = _countOfErrorCorrectionCodeWords[eccLevel][(int)version];
+
+        //получили список из массивов байт с данными
+        int countOfBlocks = _correctionLevelBlocksCount[eccLevel][(int)version];
+        List<byte[]> dataBlocks = getListBlocksData(FullData, countOfBlocks, 0);
+        
+        //получаем блоки коррекции
+        List<byte[]> correctionBlocks = [];
+        for (int i = 0; i < dataBlocks.Count(); i++)
+        {
+            byte[] arr = ProcessBlock(dataBlocks[i], (byte)cntBlocksCorrection);
+            correctionBlocks.Add(arr);
+        }
+        //мержим блоки данных и блоки коррекции
+        string mergedBlocks = MergeBlocks(dataBlocks, correctionBlocks);
 
 
         // Этап 3. Создание матрицы QR кода c лучшей маской
@@ -35,6 +63,7 @@ internal static class QrCodeBuilder
         // Этап 4. Получение строки QR кода
         //  Есть функция Magic которая возвращает QR-код в виде строки
 
+        qrCode.Append(mergedBlocks);//для теста
 
         return qrCode.ToString();
     }
@@ -289,16 +318,11 @@ internal static class QrCodeBuilder
         int posY = BORDER + 3;
         tmp.Magic(false, ZERO)
         .Magic(posX1, posY, 4, 0, 1)
-        .Magic(posX1, tmp[0].Length -
-       BORDER - 4, 4, 0, 1)
+        .Magic(posX1, tmp[0].Length - BORDER - 4, 4, 0, 1)
         .Magic(posX2, posY, 4, 0, 1);
-        foreach (var x in
-       _alignmentsPosition[a.Version])
-            foreach (var y in
-           _alignmentsPosition[a.Version].Where(y =>
-           CanMagic(x + BORDER, y + BORDER, tmp)))
-                tmp.Magic(x + BORDER, y +
-               BORDER);
+        foreach (var x in _alignmentsPosition[a.Version])
+            foreach (var y in _alignmentsPosition[a.Version].Where(y => CanMagic(x + BORDER, y + BORDER, tmp)))
+                tmp.Magic(x + BORDER, y + BORDER);
         tmp.Magic(posX2 - 4, posY + 5, 0)
         .Magic(a.Version);
         return tmp;
@@ -309,30 +333,23 @@ internal static class QrCodeBuilder
     /// </summary>
     private static List<byte[]> Magic(QR a)
     {
-        int matrixSize = Magic((byte)a,
-       BORDER);
+        int matrixSize = Magic((byte)a, BORDER);
         var size = matrixSize - BORDER * 2;
         var tmp = Magic(matrixSize, ZERO)
-        .Magic(BORDER, BORDER, size,
-       ACTIVE);
+        .Magic(BORDER, BORDER, size, ACTIVE);
         int cubeSize = 9;
         int posX1 = BORDER;
         int posY1 = BORDER;
-        int posX2 = BORDER + cubeSize +
-       (int)a * 4;
-        int posY2 = BORDER + cubeSize +
-       (int)a * 4;
-        tmp.Magic(posX1, posY1, cubeSize,
-       ZERO)
-     .Magic(posX1, posY2, cubeSize,
-    ZERO)
-     .Magic(posX2, posY1, cubeSize,
-    ZERO);
+        int posX2 = BORDER + cubeSize + (int)a * 4;
+        int posY2 = BORDER + cubeSize + (int)a * 4;
+        tmp.Magic(posX1, posY1, cubeSize, ZERO)
+        .Magic(posX1, posY2, cubeSize, ZERO)
+        .Magic(posX2, posY1, cubeSize, ZERO);
         foreach (var x in _alignmentsPosition[a])
             foreach (var y in _alignmentsPosition[a].Where(y => CanMagic(x + BORDER, y + BORDER, tmp)))
                 tmp.Magic(x + BORDER - 2, y + BORDER - 2, 5, 0);
         tmp.Magic(true, ZERO)
-        .Magic(a, true);
+       .Magic(a, true);
         return tmp;
     }
     #endregion
@@ -341,14 +358,10 @@ internal static class QrCodeBuilder
     /// Magic
     /// </summary>
     private static bool CanMagic(int x, int y, List<byte[]> matrix)
-    => !(x < POSITION_DETECTION + BORDER
-   + 1 && y < POSITION_DETECTION + BORDER + 1 ||
-    x < POSITION_DETECTION +
-   BORDER + 1 && y > matrix.Count -
-   POSITION_DETECTION - BORDER ||
-    x > matrix.Count -
-   POSITION_DETECTION - BORDER && y <
-   POSITION_DETECTION + BORDER + 1);
+    => !(x < POSITION_DETECTION + BORDER + 1 && y < POSITION_DETECTION + BORDER + 1 ||
+         x < POSITION_DETECTION + BORDER + 1 && y > matrix.Count - POSITION_DETECTION - BORDER ||
+         x > matrix.Count - POSITION_DETECTION - BORDER && y < POSITION_DETECTION + BORDER + 1);
+
     /// <summary>
     /// Magic
     /// </summary>
@@ -396,10 +409,15 @@ internal static class QrCodeBuilder
     }
     #endregion
     #region Magic
-    private const string END_OF_DATA =  "0000";
+    private const string END_OF_DATA = "0000";
+
+    /// <summary>
+    /// кодируем входные данные исзодя из их типа
+    /// </summary>
     private static string defineTypeOfInformationAndEncodeIt(string text, ref EncodingMode? codeType)
     {
         if (string.IsNullOrEmpty(text)) throw new InvalidDataException("No data to encode!");
+
         if (!codeType.HasValue)
         {
             //если не указан тип кодирования определяем по тексту
@@ -482,7 +500,7 @@ internal static class QrCodeBuilder
     }
 
     /// <summary>
-    /// цифровое кодирование, передаем 3 цифры
+    /// цифровое кодирование, передаем 3 цифры обозначающие длину бит в которые кодируем в зависимости от того полная это тройка, двойка чисел это или одна цифра осталась
     /// </summary>
     private static StringBuilder NumericCoding(string text, (byte three_digits, byte two_digits, byte one_digit) len_bits)
     {
@@ -571,7 +589,7 @@ internal static class QrCodeBuilder
     /// </summary>
     private static StringBuilder AlgorithmOfCodingAndDataLength(this StringBuilder a, EncodingMode? encMode, QR qrVersion, string inputStr)
     {
-        var encmode = encMode.GetValueOrDefault(EncodingMode.Binary);
+        var encmode = encMode.GetValueOrDefault(EncodingMode.Binary); //это чтобы не ругалось на nullable тип
         return a.Append(GetMethodCodingAndLengthData(encmode, qrVersion, inputStr, _codeTypeMode));
     }
 
@@ -580,57 +598,81 @@ internal static class QrCodeBuilder
         string dataLength = GetDataLength(encMode, qrVer, inputText);
         return mapEncodingMode[encMode] + dataLength; //возвращаем строку из метода кодирования + длина данных
     }
+
     private static readonly string[] _magicTextArray = ["11101100", "00010001"];
-    private static StringBuilder Magic(this StringBuilder a)
+    /// <summary>
+    /// дополняем строку нулями пока длина не кратна 8
+    /// </summary>
+    private static StringBuilder AddLengthOfStringToMultipleEight(this StringBuilder a)
     {
         while (a.Length % 8 != 0)
             a.Append('0');
         return a;
     }
-    private static string Magic(string a, int b)
+
+    /// <summary>
+    /// дополняем данные до максимального размера чередуя 2 байта
+    /// </summary>
+    private static string ComplementData(string inputData, int maxDataLength)
     {
-        var sb = new StringBuilder(a);
-        var cnt = (b - a.Length) / 8;
+        var sb = new StringBuilder(inputData);
+        var cnt = (maxDataLength - inputData.Length) / 8; //сколько полных блоков можно записать
         for (int i = 0; i < cnt; i++)
         {
-            sb.Append(_magicTextArray[i % 2]);
+            sb.Append(_magicTextArray[i % 2]);//чередуя дополняем до максимального размера данных
         }
+
+        sb.AddLengthOfStringToMultipleEight();//добавляем нули для кратности 8
+
         return sb.ToString();
     }
-    public static List<byte[]> Magic(string a, int b, int c)
+
+    /// <summary>
+    /// 
+    /// </summary>
+    public static List<byte[]> getListBlocksData(string strData, int cntBlocksOfData, int c)
     {
-        List<byte> tmp = [];
-        var str = Enumerable.Range(0, a.Length / 8).Select(i => a.Substring(i * 8,
-       8));
+        List<byte> listBytes = [];
+        //пишем каждый байт отдельно в массив строк
+        var str = Enumerable.Range(0, strData.Length / 8).Select(i => strData.Substring(i * 8, 8));
         foreach (var line in str)
         {
-            tmp.Add(Convert.ToByte(line, 2));
+            //заносим все байты в список байт
+            listBytes.Add(Convert.ToByte(line, 2));
         }
-        var size = a.Length / 8 / b;
-        var extraSize = a.Length / 8 % b;
-        List<byte[]> list = [];
-        for (int i = b - 1; i >= 0; i--)
+
+        var size = strData.Length / 8 / cntBlocksOfData; //все колво байт делим на колво блоков данных
+        var extraSize = strData.Length / 8 % cntBlocksOfData; //колво дополненных блоков
+
+        List<byte[]> listData = []; //список из байт блоков(длина которых равна количеству байтов в текущем блоке + байты коррекции)
+
+        for (int i = cntBlocksOfData - 1; i >= 0; i--)
         {
-            var currentSize = size +
-           (extraSize-- > 0 ? 1 : 0);
-            list.Insert(0, new
-           byte[currentSize]);
+            //вставляем блоки вместе с дополненными, если дополненный блок(они идут в конце) то длина блока будет size+1
+            var currentSize = size + (extraSize-- > 0 ? 1 : 0);
+            listData.Insert(0, new byte[currentSize]);
         }
+
         var index = c;
-        foreach (var block in list)
+        foreach (var block in listData)
         {
-            for (int i = 0; i < block.Length;
-           i++)
+            //заполнение блоков
+            for (int i = 0; i < block.Length; i++)
             {
-                block[i] = tmp[index++];
+                block[i] = listBytes[index++];
             }
         }
 
-        return list;
+        //возвращаем блоки данных
+        return listData;
     }
     #endregion
 
+
     #region Magic
+    /// <summary>
+    /// количество блоков для коррекции в зависимости от уровня коррекции и версии
+    /// </summary>
     private static readonly Dictionary<EccLevel, byte[]> _countOfErrorCorrectionCodeWords = new()
  {
          {EccLevel.L,
@@ -646,78 +688,53 @@ internal static class QrCodeBuilder
         [NA,17,28,22,16,22,28,26,26,24,28,24,28,22,24
         ,24,30,28,28,26,28]},
  };
+
+    /// <summary>
+    /// количество блоков
+    /// </summary>
     private static readonly Dictionary<EccLevel, byte[]> _correctionLevelBlocksCount = new()
     {
-         {EccLevel.L,
-        [NA,01,01,01,01,01,02,02,02,02,04,04,04,04,04
-        ,06,06,06,06,07,08]},
-         {EccLevel.M,
-        [NA,01,01,01,02,02,04,04,04,05,05,05,08,09,09
-        ,10,10,11,13,14,16]},
-         {EccLevel.Q,
-        [NA,01,01,02,02,04,04,06,06,08,08,08,10,12,16
-        ,12,17,16,18,21,20]},
-         {EccLevel.H,
-        [NA,01,01,02,04,04,04,05,06,08,08,11,11,16,16
-        ,18,16,19,21,25,25]},
+         {EccLevel.L, [NA,01,01,01,01,01,02,02,02,02,04,04,04,04,04,06,06,06,06,07,08]},
+         {EccLevel.M, [NA,01,01,01,02,02,04,04,04,05,05,05,08,09,09,10,10,11,13,14,16]},
+         {EccLevel.Q, [NA,01,01,02,02,04,04,06,06,08,08,08,10,12,16,12,17,16,18,21,20]},
+         {EccLevel.H, [NA,01,01,02,04,04,04,05,06,08,08,11,11,16,16,18,16,19,21,25,25]},
     };
+
+    /// <summary>
+    /// генерирующий многочлен, нужен для создания байтов коррекции
+    /// </summary>
     private static readonly Dictionary<byte, byte[]> _correctionLevelGeneratingPolynomial = new()
     {
          // x^7 + α^87x^6 + α^229x^5 + α^146x^4 + 
          // α^149x^3 + α^238x^2 + α^102x^ + α^21
-         {7, [87, 229, 146, 149, 238, 102,
-        21]}, 
+         {7, [87, 229, 146, 149, 238, 102, 21]}, 
          // x^10 + α^251x^9 + α^67x^8 + α^46x^7 + α^61x^6 + 
          // α^118x^5 + α^70x^4 + α^64x^3 + α^94x^2 + α^32x^ + α^45
-         {10, [251, 67, 46, 61, 118, 70, 64,
-        94, 32, 45]}, 
+         {10, [251, 67, 46, 61, 118, 70, 64, 94, 32, 45]}, 
          // x^13 + α^74x^12 + α^152x^11 + α^176x^10 + α^100x^9 + α^86x^8 + 
          // α^100x^7 + α^106x^6 + α^104x^5 + α^130x^4 + α^218x^3 + α^206x^2 + α^140x^ +α^78
-         {13, [74, 152, 176, 100, 86, 100,
-        106, 104, 130, 218, 206, 140, 78]},
-         {15, [8, 183, 61, 91, 202, 37, 51,
-        58, 58, 237, 140, 124, 5, 99, 105]}, 
+         {13, [74, 152, 176, 100, 86, 100, 106, 104, 130, 218, 206, 140, 78]},
+         {15, [8, 183, 61, 91, 202, 37, 51, 58, 58, 237, 140, 124, 5, 99, 105]}, 
          // x^16 + α^120x^15 + α^104x^14 + α^107x^13 + α^109x^12 + α^102x^11 + α^161x^10+ α^76x^9 +
          // α^3x^8 + α^91x^7 + α^191x^6 +α^147x^5 + α^169x^4 + α^182x^3 + α^194x^2 +α^225x^ + α^120
-         {16, [120, 104, 107, 109, 102, 161,
-        76, 3, 91, 191, 147, 169, 182, 194, 225,
-        120]}, 
+         {16, [120, 104, 107, 109, 102, 161, 76, 3, 91, 191, 147, 169, 182, 194, 225, 120]}, 
          // x^17 + α^43x^16 + α^139x^15 + α^206x^14 + α^78x^13 + α^43x^12 + α^239x^11+ α^123x^10 + α^206x^9 + α^214x^8 + α^147x^7+ α^24x^6 + 
          // α^99x^5 + α^150x^4 + α^39x^3 + α^243x^2 + α^163x^ + α^136
-               {17, [43, 139, 206, 78, 43, 239, 123,
-        206, 214, 147, 24, 99, 150, 39, 243, 163,
-        136]},
+          {17, [43, 139, 206, 78, 43, 239, 123, 206, 214, 147, 24, 99, 150, 39, 243, 163, 136]},
          // x^18 + α^215x^17 + α^234x^16 + α^158x^15 + α^94x^14 + α^184x^13 + α^97x^12 +α^118x^11 + α^170x^10 + α^79x^9 + α^187x^8 +α^152x^7 + 
          // α^148x^6 + α^252x^5 + α^179x^4 + α^5x^3 + α^98x^2 + α^96x^ + α^153
-         {18, [215, 234, 158, 94, 184, 97,
-        118, 170, 79, 187, 152, 148, 252, 179, 5, 98,
-        96, 153]},
-         {20, [17, 60, 79, 50, 61, 163, 26,
-        187, 202, 180, 221, 225, 83, 239, 156, 164,
-        212, 212, 188, 190]},
+         {18, [215, 234, 158, 94, 184, 97, 118, 170, 79, 187, 152, 148, 252, 179, 5, 98, 96, 153]},
+         {20, [17, 60, 79, 50, 61, 163, 26, 187, 202, 180, 221, 225, 83, 239, 156, 164, 212, 212, 188, 190]},
          // x^22 + α^210x^21 + α^171x^20 + α^247x^19 + α^242x^18 + α^93x^17 + α^230x^16+ α^14x^15 + α^109x^14 + α^221x^13 + α^53x^12 +
          // α^200x^11 + α^74x^10 + α^8x^9 + α^172x^8 + α^98x^7 + α^80x^6 + α^219x^5 + α^134x^4 + α^160x^3 + α^105x^2 + α^165x^ +α^231
-         {22, [210, 171, 247, 242, 93, 230,
-        14, 109, 221, 53, 200, 74, 8, 172, 98, 80,
-        219, 134, 160, 105, 165, 231]},
-         {24, [229, 121, 135, 48, 211, 117,
-        251, 126, 159, 180, 169, 152, 192, 226, 228,
-        218, 111, 0, 117, 232, 87, 96, 227, 21]},
-         {26, [173, 125, 158, 2, 103, 182,
-        118, 17, 145, 201, 111, 28, 165, 53, 161, 21,
-        245, 142, 13, 102, 48, 227, 153, 145, 218,
-        70]},
+         {22, [210, 171, 247, 242, 93, 230, 14, 109, 221, 53, 200, 74, 8, 172, 98, 80, 219, 134, 160, 105, 165, 231]},
+         {24, [229, 121, 135, 48, 211, 117, 251, 126, 159, 180, 169, 152, 192, 226, 228, 218, 111, 0, 117, 232, 87, 96, 227, 21]},
+         {26, [173, 125, 158, 2, 103, 182, 118, 17, 145, 201, 111, 28, 165, 53, 161, 21, 245, 142, 13, 102, 48, 227, 153, 145, 218, 70]},
          // x^28 + α^168x^27 + α^223x^26 + α^200x^25 + α^104x^24 + α^224x^23 + α^234x^22+ α^108x^21 + α^180x^20 + α^110x^19 +α^190x^18 + α^195x^17 + 
          // α^147x^16 + α^205x^15 + α^27x^14 + α^232x^13 + α^201x^12 + α^21x^11 + α^43x^10 +α^245x^9 + α^87x^8 + α^42x^7 + α^195x^6 + α^212x^5 + α^119x^4 +
          // α^242x^3 + α^37x^2 + α^9x^ + α^123
-         {28, [168, 223, 200, 104, 224, 234,
-        108, 180, 110, 190, 195, 147, 205, 27, 232,
-        201, 21, 43, 245, 87, 42, 195, 212, 119, 242,
-        37, 9, 123]},
-         {30, [41, 173, 145, 152, 216, 31,
-        179, 182, 50, 48, 110, 86, 239, 96, 222, 125,
-        42, 173, 226, 193, 224, 130, 156, 37, 251,
-        216, 238, 40, 192, 180]},
+         {28, [168, 223, 200, 104, 224, 234, 108, 180, 110, 190, 195, 147, 205, 27, 232, 201, 21, 43, 245, 87, 42, 195, 212, 119, 242, 37, 9, 123]},
+         {30, [41, 173, 145, 152, 216, 31, 179, 182, 50, 48, 110, 86, 239, 96, 222, 125, 42, 173, 226, 193, 224, 130, 156, 37, 251, 216, 238, 40, 192, 180]},
          };
 
     private static readonly byte[]
@@ -795,44 +812,58 @@ internal static class QrCodeBuilder
        ];
 
     /// <summary>
-    /// Magic
+    /// Формирование байтов коррекции
     /// </summary>
-    private static byte[] Magic(byte[] a, byte b)
+    private static byte[] ProcessBlock(byte[] curBlock, byte colBytesCorrection)
     {
-        var size = Math.Max(a.Length, b);
-        var m = new List<byte>(a);
-        var g =
-        _correctionLevelGeneratingPolynomial[b];
-        var n = g.Length;
+        //берем максимум между количеством байтов в текущем блоке и количеством байтов коррекции
+        var size = Math.Max(curBlock.Length, colBytesCorrection);
+        //подготавливаем массив, заполняя байтами текущего блока, а конец нулями
+        var m = new List<byte>(curBlock);
+        //находим генерирующий многочлен
+        var genMnogochlen = _correctionLevelGeneratingPolynomial[colBytesCorrection];
+        //длина генерирующего многочлена
+        var lenMnogoclen = genMnogochlen.Length;
+        //заполняем конец нулями
         while (m.Count != size)
             m.Add(0);
-        for (int i = 0; i < a.Length; i++)
+
+        for (int i = 0; i < curBlock.Length; i++)
         {
-            byte e = m[0];
+            //берем первый элемент массива, удаляем его, сдвигаемо остальные влево, вконце заполняем нулем
+            byte elem = m[0];
             m.RemoveAt(0);
             m.Add(0);
-            if (e == 0) continue;
-            byte bb = _backGaloisField[e];
-            for (int x = 0; x < g.Length;
-           x++)
+
+            //если он был равен нулю переходим к следющей итерации
+            if (elem == 0) continue;
+
+            //находим соответсвующее ему обратное поле Галуа
+            byte backGalouField = _backGaloisField[elem];
+            //для n первых элементов
+            for (int x = 0; x < genMnogochlen.Length; x++)
             {
-                var c = (g[x] + bb) % 255;
-                var d = _galoisField[c];
-                m[x] = (byte)(m[x] ^ d);
+                //к iтому значению генерирующего многочлена прибавляем обратное поле галуа,  и делаем чтобы не было больше 254
+                var c = (genMnogochlen[x] + backGalouField) % 255;
+                //находим значению поля галуа
+                var galua = _galoisField[c];
+                //делаем xor с i той ячейкой и записываем в нее
+                m[x] = (byte)(m[x] ^ galua);
+
+                //таким образом вервые n байтов текущего блока будут байтами коррекции, для каждго блока данных получится соответсвующий блок байтов коррекции
             }
         }
 
-        return m.Take(n).ToArray();
+        return m.Take(lenMnogoclen).ToArray();
     }
 
-    private static void Magic(List<byte[]> a, StringBuilder b)
+    private static void MergeDataAndCorrectionBlock(List<byte[]> a, StringBuilder str)
     {
         if (a.Count == 1)
         {
             foreach (var c in a[0])
             {
-                b.Append(Convert.ToString(c,
-               2).PadLeft(8, '0'));
+                str.Append(Convert.ToString(c, 2).PadLeft(8, '0'));
             }
             return;
         }
@@ -843,19 +874,25 @@ internal static class QrCodeBuilder
             {
                 if (i < bytes.Length)
 
-                    b.Append(Convert.ToString(bytes[i],
-                    2).PadLeft(8, '0'));
+                    str.Append(Convert.ToString(bytes[i], 2).PadLeft(8, '0'));
             }
         }
     }
 
-    private static string Magic(List<byte[]> a, List<byte[]> b)
+    /// <summary>
+    /// Объединение блоков данных и блоков коррекции
+    /// </summary>
+    private static string MergeBlocks(List<byte[]> a, List<byte[]> b)
     {
         var sb = new StringBuilder();
-        Magic(a, sb);
-        Magic(b, sb);
+        MergeDataAndCorrectionBlock(a, sb);
+        MergeDataAndCorrectionBlock(b, sb);
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Максимальный размер данных в зависимости от версии и уровня коррекции
+    /// </summary>
     private static readonly Dictionary<(EccLevel correctionLevel, QR version), int> _maxData = new()
 {
         {(EccLevel.H, QR.V1), 72},
@@ -942,35 +979,41 @@ internal static class QrCodeBuilder
 
     /// <summary>
     /// Magic
-    /// предположительно возвращает qr code в виде строки
+    ///  возвращает qr code в виде строки, принимает входную строку, закодированные данные, режим кодирования, версию, уровень коррекции
     /// </summary>
-    private static (string a, EccLevel b, QR c) Magic(string a, string b, EncodingMode encMode,
+    private static (string a, EccLevel b, QR c) QRcodeWithECClevelAndVersion(string inputStr, string Data, EncodingMode encMode,
     QR qrVer, EccLevel? corLevel = null)
     {
         if (qrVer == NA)
             throw new NotSupportedException("QR-code version start with 1!");
 
         var sb = new StringBuilder();
-        sb.AlgorithmOfCodingAndDataLength(encMode, qrVer, a).Append(b).Magic();
+        //пишем метод кодирования, и инфу о длине данных, прибавляем сами данные
+        sb.AlgorithmOfCodingAndDataLength(encMode, qrVer, inputStr).Append(Data);
         var length = sb.Length;
-        if ((int)qrVer > 20)  throw new NotSupportedException($"Current QR-code does not support version {qrVer} yet!");
+        if ((int)qrVer > 20) throw new NotSupportedException($"Current QR-code does not support version {qrVer} yet!");
 
         if (corLevel.HasValue)
         {
             foreach (var found in _maxData
             .Where(v => v.Key.version >= qrVer && v.Key.correctionLevel >= corLevel.Value)
             .Where(l => length < l.Value))
+            {
                 return (sb.ToString(), found.Key.correctionLevel, found.Key.version);
+            }
         }
+
         foreach (var found in _maxData
         .Where(v => v.Key.version == qrVer)
-       .OrderByDescending(x => x.Key.correctionLevel)
+        .OrderByDescending(x => x.Key.correctionLevel)
         .Where(x => length < x.Value))
+        {
             return (sb.ToString(), found.Key.correctionLevel, found.Key.version);
-        if ((int)qrVer > 20)
-            throw new NotSupportedException($"Current QR-code does not support data length {length} yet!");
+        }
 
-        return Magic(a, b, encMode, qrVer + 1, corLevel);
+        if ((int)qrVer > 20) throw new NotSupportedException($"Current QR-code does not support data length {length} yet!");
+
+        return QRcodeWithECClevelAndVersion(inputStr, Data, encMode, qrVer + 1, corLevel);
     }
     #endregion
     #region Magic
@@ -1194,4 +1237,6 @@ b), (offset + 7, b)];
         return res.Item2.b;
     }
     #endregion
+
+
 }
