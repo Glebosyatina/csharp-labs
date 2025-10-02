@@ -62,8 +62,17 @@ internal static class QrCodeBuilder
 
         // Этап 4. Получение строки QR кода
         //  Есть функция Magic которая возвращает QR-код в виде строки
+        QrCodeData qrData = new QrCodeData()
+        {
+            Data = mergedBlocks,
+            Version = version,
+            CorrectionLevel = eccLevel
+        };
 
-        qrCode.Append(mergedBlocks);//для теста
+        var qr = getQRCode(qrData,ref maskNum).getStringFromListBytes(false);
+
+
+        qrCode.Append(qr);//для теста
 
         return qrCode.ToString();
     }
@@ -95,7 +104,7 @@ internal static class QrCodeBuilder
     /// <summary>
     /// Magic
     /// </summary>
-    private static string Magic(this List<byte[]> a, bool b)
+    private static string getStringFromListBytes(this List<byte[]> a, bool b)
     {
         var sb = new StringBuilder();
         var length = a.Count % 2 == 1 ? a.Count + 1 : a.Count;
@@ -213,6 +222,8 @@ internal static class QrCodeBuilder
         a[b][c] = d;
         return a;
     }
+
+    //позиции выравнивающих узоров
     private static readonly Dictionary<QR, int[]> _alignmentsPosition = new()
     {
          {QR.V1, []},
@@ -236,6 +247,8 @@ internal static class QrCodeBuilder
          {QR.V19, [6, 30, 58, 86]},
          {QR.V20, [6, 34, 62, 90]},
     };
+    
+    //коды версий начинаю с 7ой
     private static readonly Dictionary<QR, string> _versionCodes = new()
     {
          // 000010 ▄
@@ -286,7 +299,7 @@ internal static class QrCodeBuilder
     /// </summary>
     private static List<byte[]> Magic(this List<byte[]> a, QR b, bool c = false)
     {
-        if ((byte)b < 7) return a;
+        if ((byte)b < 7) return a; //если версия меньше 7 ничего не делаем
         int pos = 0;
         var version = _versionCodes[b];
         int offsetColumn = BORDER;
@@ -304,14 +317,14 @@ internal static class QrCodeBuilder
     }
     /// <summary>
     /// TODO собрать матрицу
+    /// собираем матрице по данным, версии, уровню коррекции и маске
     /// </summary>
     private static List<byte[]> Magic(this QrCodeData a, Mask b)
     {
-        var size = Magic((byte)a.Version,
-       BORDER);
+        var size = Magic((byte)a.Version, BORDER);
         var tmp = Magic(size)
         .Magic(a.Data, a.Version)
-        .Magic(Magic(b))
+        .Magic(GetMask(b))
         .Magic(a.Version, b, a.CorrectionLevel);
         int posX1 = BORDER + 3;
         int posX2 = tmp.Count - BORDER - 4;
@@ -329,9 +342,9 @@ internal static class QrCodeBuilder
     }
 
     /// <summary>
-    /// Magic
+    /// собираем матрице по версии
     /// </summary>
-    private static List<byte[]> Magic(QR a)
+    private static List<byte[]> createMatrix(QR a)
     {
         int matrixSize = Magic((byte)a, BORDER);
         var size = matrixSize - BORDER * 2;
@@ -365,10 +378,10 @@ internal static class QrCodeBuilder
     /// <summary>
     /// Magic
     /// </summary>
-    private static List<byte[]> Magic(this List<byte[]> a, string b, QR c)
+    private static List<byte[]> Magic(this List<byte[]> data, string b, QR c)
     {
-        var blockedModules = Magic(c);
-        var size = a.Count - BORDER * 2;
+        var blockedModules = createMatrix(c); //собираем матрицу по версии кода
+        var size = data.Count - BORDER * 2;
         var up = true;
         var index = 0;
         var count = b.Length;
@@ -379,33 +392,31 @@ internal static class QrCodeBuilder
             for (var i = 0; i < size; i++)
             {
                 var row = up ? size + BORDER - i - 1 : i + BORDER;
-                if (index < count &&
-                !blockedModules.IsMagic(row, column))
-                    Magic(a, blockedModules, row, column, b[index++]);
+                if (index < count && !blockedModules.IsActive(row, column))
+                    Magic(data, blockedModules, row, column, b[index++]);
 
-                if (index < count && column >
-               0 && !blockedModules.IsMagic(row, column - 1))
-                    Magic(a, blockedModules, row, column - 1, b[index++]);
+                if (index < count && column > 0 && !blockedModules.IsActive(row, column - 1))
+                    Magic(data, blockedModules, row, column - 1, b[index++]);
             }
             up = !up;
         }
-        return a;
+        return data;
 
     }
     /// <summary>
-    /// Magic
+    /// проверяем активный или неактивный модуль
     /// </summary>
-    private static bool IsMagic(this List<byte[]> a, int b, int c)
+    private static bool IsActive(this List<byte[]> a, int b, int c)
     {
         return a[b][c] == ZERO;
     }
     /// <summary>
     /// Magic
     /// </summary>
-    private static void Magic(List<byte[]> a, List<byte[]> b, int c, int d, char e)
+    private static void Magic(List<byte[]> a, List<byte[]> b, int row, int col, char e)
     {
-        b[c][d] = ZERO;
-        a[c][d] = e != '1' ? ACTIVE : ZERO;
+        b[row][col] = ZERO;
+        a[row][col] = e != '1' ? ACTIVE : ZERO;
     }
     #endregion
     #region Magic
@@ -979,7 +990,7 @@ internal static class QrCodeBuilder
 
     /// <summary>
     /// Magic
-    ///  возвращает qr code в виде строки, принимает входную строку, закодированные данные, режим кодирования, версию, уровень коррекции
+    ///  возвращает qr code c уровнем коррекции и версией в виде строки, принимает входную строку, закодированные данные, режим кодирования, версию, уровень коррекции
     /// </summary>
     private static (string a, EccLevel b, QR c) QRcodeWithECClevelAndVersion(string inputStr, string Data, EncodingMode encMode,
     QR qrVer, EccLevel? corLevel = null)
@@ -1019,6 +1030,7 @@ internal static class QrCodeBuilder
     #region Magic
     /// <summary>
     /// Format information
+    /// код маски и уровня коррекции
     /// </summary>
     private static readonly Dictionary<(EccLevel correctionLevel, Mask maskNum), string> _masksAndCorrectionLevel = new()
     {
@@ -1060,8 +1072,7 @@ internal static class QrCodeBuilder
     /// </summary>
     private static List<byte[]> Magic(this List<byte[]> a, QR b, Mask c, EccLevel d)
     {
-        var maskNumAndCorrectionLevel =
-       _masksAndCorrectionLevel[(d, c)];
+        var maskNumAndCorrectionLevel = _masksAndCorrectionLevel[(d, c)]; //определили код для маски и уровня коррекции
         Magic(a, b, maskNumAndCorrectionLevel);
         return a;
     }
@@ -1081,49 +1092,45 @@ internal static class QrCodeBuilder
 
    ];
     /// <summary>
-    /// Magic
+    /// в зависимости от версии кода считаем координаты смещений
     /// </summary>
-    private static Pair[] Magic(this QR a, int b)
+    private static Pair[] getListPairOffset(this QR a, int b)
     {
         var offset = 11 + (int)a * 4;
-        return [(b, offset + 7), (b, offset
-+6 ), (b, offset + 5),
- (b, offset + 4), (b, offset +
-3), (b, offset + 2),
- (b, offset + 1), (b, offset),
-(offset + 1, b),
- (offset + 2, b), (offset + 3,
-b), (offset + 4, b),(offset + 5, b), (offset + 6,
-b), (offset + 7, b)];
+        return [(b, offset + 7), (b, offset+6 ), (b, offset + 5),
+         (b, offset + 4), (b, offset +3), (b, offset + 2),
+         (b, offset + 1), (b, offset),(offset + 1, b),
+         (offset + 2, b), (offset + 3,b), (offset + 4, b),(offset + 5, b), (offset + 6,b), (offset + 7, b)
+         ];
     }
     /// <summary>
     /// Magic
     /// </summary>
-    private static void Magic(Pair[] a, List<byte[]> b, int c, char d)
+    private static void invertBit(Pair[] topLeftPattern, List<byte[]> data, int idx, char bitOfCode)
     {
-        (var x, var y) = (a[c].X, a[c].Y);
-        b[y][x] = d != '1' ? ACTIVE : ZERO;
+        (var x, var y) = (topLeftPattern[idx].X, topLeftPattern[idx].Y);
+        data[y][x] = bitOfCode != '1' ? ACTIVE : ZERO; //инвертируем бит кодаа коррекции и маски и пишем в блок данных
     }
     /// <summary>
-    /// Magic
+    /// Применяем код уровня коррекции и маски к блокам
     /// </summary>
-    private static List<byte[]> Magic(this List<byte[]> a, QR b, string c)
+    private static List<byte[]> Magic(this List<byte[]> data, QR b, string codeCorrectionAndMask)
     {
-        for (int i = 0; i < c.Length; i++)
+        for (int i = 0; i < codeCorrectionAndMask.Length; i++)
         {
-            char letter = c[i];
+            char letter = codeCorrectionAndMask[i]; //берем каждый символ кода коррекции и маски
 
-            Magic(_masksAndCorrectionLevelTopLeftTemplate, a, i, letter);
-            Magic(b.Magic(10), a, i, letter);
+            invertBit(_masksAndCorrectionLevelTopLeftTemplate, data, i, letter); //инвертируем бит кода 
+            invertBit(b.getListPairOffset(10), data, i, letter);
         }
-        return a;
+        return data;
     }
     #endregion
     #region Magic
     /// <summary>
-    /// Magic
+    /// маска которая накладывается на каждый модуль, применяется только к модулям данных
     /// </summary>
-    private static Predicate<(int, int)> Magic(Mask a)
+    private static Predicate<(int, int)> GetMask(Mask a)
     => a switch
     {
         Mask.M000 => ((int x, int y) m)
@@ -1131,11 +1138,9 @@ b), (offset + 7, b)];
         Mask.M001 => ((int x, int y) m)
         => (m.x / 3 + m.y / 2) % 2 == 0,
         Mask.M010 => ((int x, int y) m)
-        => ((m.x * m.y) % 3 + (m.x + m.y) % 2) % 2 ==
-        0,
+        => ((m.x * m.y) % 3 + (m.x + m.y) % 2) % 2 == 0,
         Mask.M011 => ((int x, int y) m)
-        => ((m.x * m.y) % 2 + (m.x * m.y) % 3) % 2 ==
-        0,
+        => ((m.x * m.y) % 2 + (m.x * m.y) % 3) % 2 == 0,
         Mask.M100 => ((int x, int y) m)
         => m.y % 2 == 0,
         Mask.M101 => ((int x, int y) m)
@@ -1229,7 +1234,7 @@ b), (offset + 7, b)];
     /// <summary>
     /// Magic
     /// </summary>
-    private static List<byte[]> Magic(this QrCodeData a, ref Mask? b)
+    private static List<byte[]> getQRCode(this QrCodeData a, ref Mask? b)
     {
         var res = Enumerable.Range(0, 8).Select(maskNumber => (maskNumber, (0, a.Magic((Mask)maskNumber)).Magic().Magic(0.0))).MinBy(x => x.Item2.a);
         b = (Mask)res.maskNumber;

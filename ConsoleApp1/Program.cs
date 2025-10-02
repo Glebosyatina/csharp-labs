@@ -11,5 +11,14 @@ while (true){
     Console.WriteLine("QR code text:");
     Console.WriteLine(qRcode);
 
+    #region type info
+    Console.WriteLine("QR version:");
+    Console.WriteLine(qRcode.Version);
+    Console.WriteLine("Type of coding:");
+    Console.WriteLine(qRcode.Mode);
+
+    #endregion
+
+
     Console.ReadKey();
 }

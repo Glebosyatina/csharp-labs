@@ -2,13 +2,12 @@
 
 public class QRcode
 {
-    public QRcode(string? text)
+    public QRcode(string text)
     {
-        this.SourceText = text;
-        this.mode = EncodingMode.Binary;
         this.mask = Mask.M101;
-        this.version = QR.V1;
+        this.version = QR.V2;
         this.level = EccLevel.M;
+        this.SourceText = text;
     }
     private string? sourceText;
     /// <summary>
@@ -20,7 +19,7 @@ public class QRcode
         set
         {
             sourceText = value;
-            QrCode = QrCodeBuilder.GetQrCode(sourceText, ref version, ref mode, ref level, ref mask);
+            QrCode = QrCodeBuilder.GetQrCode(sourceText, ref this.version, ref this.mode, ref this.level, ref this.mask);
         }
     }//текст для кодирования
 
