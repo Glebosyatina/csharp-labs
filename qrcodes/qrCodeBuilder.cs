@@ -21,12 +21,14 @@ internal static class QrCodeBuilder
         // Тут нужно вызвать 2 функции Magic
 
         //определяем тип данных и формируем строку из 0 и 1, добавляем ее к полю о методе кодирования и колва данных
-        string dataEncode = defineTypeOfInformationAndEncodeIt(text, ref codeType); 
- 
+        string dataEncode = defineTypeOfInformationAndEncodeIt(text, ref codeType);
+        //Console.WriteLine(dataEncode);
+
         var QrCodeType = codeType.GetValueOrDefault(EncodingMode.Binary);//обойти Nullable
 
         //получаем закодированные данные, уровень коррекции, версию кода
         var (stage1, eccLevel, version) = QRcodeWithECClevelAndVersion(text, dataEncode, QrCodeType, qrCodeVersion, needCorrectionLevel);
+        //Console.WriteLine(stage1);
 
         // Этап 2. Блоки с данными + байты коррекции
         // А тут целых 4 разных функций Magic
@@ -34,7 +36,7 @@ internal static class QrCodeBuilder
         //максимальный размер данных
         int maxDataLength = _maxData[(eccLevel, version)];
         //дополняеем блок с данными чередующимися байтами и нулями для кртаности 8
-        var FullData = ComplementData(dataEncode, maxDataLength);
+        var FullData = ComplementData(stage1, maxDataLength);
 
         //получаем колво блоков коррекции
         int cntBlocksCorrection = _countOfErrorCorrectionCodeWords[eccLevel][(int)version];
@@ -70,7 +72,6 @@ internal static class QrCodeBuilder
         };
 
         var qr = getQRCode(qrData,ref maskNum).getStringFromListBytes(false);
-
 
         qrCode.Append(qr);//для теста
 
@@ -319,7 +320,7 @@ internal static class QrCodeBuilder
     /// TODO собрать матрицу
     /// собираем матрице по данным, версии, уровню коррекции и маске
     /// </summary>
-    private static List<byte[]> Magic(this QrCodeData a, Mask b)
+    private static List<byte[]> getMatrix(this QrCodeData a, Mask b)
     {
         var size = Magic((byte)a.Version, BORDER);
         var tmp = Magic(size)
@@ -591,6 +592,7 @@ internal static class QrCodeBuilder
             _ => inputStr.Length,
         };
         var size = GetLengthFieldStoreAmountOfData(encMode, qrVersion);  //получаем длину поля хранящего колво данных на основе режима кодирования и версии
+        //Console.WriteLine(size);
         var str = Convert.ToString(length, 2).PadLeft(size, '0');  //дополняем до нужной длины нулями слева
         return str; //возвращаем поле хранящее колво данных в виде строки
     }
@@ -992,8 +994,7 @@ internal static class QrCodeBuilder
     /// Magic
     ///  возвращает qr code c уровнем коррекции и версией в виде строки, принимает входную строку, закодированные данные, режим кодирования, версию, уровень коррекции
     /// </summary>
-    private static (string a, EccLevel b, QR c) QRcodeWithECClevelAndVersion(string inputStr, string Data, EncodingMode encMode,
-    QR qrVer, EccLevel? corLevel = null)
+    private static (string a, EccLevel b, QR c) QRcodeWithECClevelAndVersion(string inputStr, string Data, EncodingMode encMode, QR qrVer, EccLevel? corLevel = null)
     {
         if (qrVer == NA)
             throw new NotSupportedException("QR-code version start with 1!");
@@ -1236,7 +1237,7 @@ internal static class QrCodeBuilder
     /// </summary>
     private static List<byte[]> getQRCode(this QrCodeData a, ref Mask? b)
     {
-        var res = Enumerable.Range(0, 8).Select(maskNumber => (maskNumber, (0, a.Magic((Mask)maskNumber)).Magic().Magic(0.0))).MinBy(x => x.Item2.a);
+        var res = Enumerable.Range(0, 8).Select(maskNumber => (maskNumber, (0, a.getMatrix((Mask)maskNumber)).Magic().Magic(0.0))).MinBy(x => x.Item2.a);
         b = (Mask)res.maskNumber;
 
         return res.Item2.b;
